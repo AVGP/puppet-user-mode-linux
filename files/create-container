@@ -1,0 +1,318 @@
+#!/bin/sh
+
+### functions
+
+f() { echo "Failed."; exit; }
+
+setup_net()
+{
+  echo "Configuring network"
+  while :; do
+    echo -n "IP address of the UML machine (e.g. 192.168.0.100) > "
+    read nw_ip
+    if [ "x$nw_ip" != "x" ]; then
+      break
+    fi
+  done
+  while :; do
+    echo -n "Network (e.g. 192.168.0.0) > "
+    read nw_network
+    if [ "x$nw_network" != "x" ]; then
+      break
+    fi
+  done
+  while :; do
+    echo -n "Broadcast address (e.g. 192.168.0.255) > "
+    read nw_bcast
+    if [ "x$nw_bcast" != "x" ]; then
+      break
+    fi
+  done
+  while :; do
+    echo -n "Netmask (e.g. 255.255.255.0) > "
+    read nw_netmask
+    if [ "x$nw_netmask" != "x" ]; then
+      break
+    fi
+  done
+  while :; do
+    echo -n "Your internet gateway (e.g. 192.168.0.1) > "
+    read nw_gw
+    if [ "x$nw_gw" != "x" ]; then
+      break
+    fi
+  done
+
+  echo ""
+  echo "You entered:"
+  echo "  IP address:        $nw_ip"
+  echo "  Network:           $nw_network"
+  echo "  Broadcast address: $nw_bcast"
+  echo "  Netmask:           $nw_netmask"
+  echo "  Gateway:           $nw_gw"
+
+  while :; do
+    echo -n "Is this correct? [y/n]: "
+    read nw_ok
+  
+    case "$nw_ok" in
+      y | yes)
+        break
+        ;;
+      n | no)
+        setup_net
+        return
+        break
+        ;;
+      *)
+        echo "Please enter 'y' or 'n'"
+    esac
+  done
+}
+
+### our script begins here
+
+if [ "`id -u`" != "0" ]; then
+  echo "I won't run as user. I need root."
+  exit 1
+fi
+
+if [ "x$1" = "x" ]; then
+  echo "Enter the name of the UML machine or press CTRL+C to abort:"
+  echo -n "> "
+  read name
+fi
+
+if [ "x$name" = "x" ]; then
+  echo "Aborting."
+  exit 1
+fi 
+
+
+echo
+echo ==============================
+echo Creating file system
+echo ==============================
+echo
+if [ "x$1" = "x" ]; then
+  echo "Enter the size of your root partition in MB"
+  echo -n "> "
+  read size
+fi
+if [ "x$size" = "x" ]; then
+  echo "Aborting."
+  exit 1
+fi 
+mkdir $name || f
+# print this so the user does not think that the script is hanging
+echo dd if=/dev/zero of=$name/root_fs count=$size bs=1M
+dd if=/dev/zero of=$name/root_fs count=$size bs=1M || f
+/sbin/mke2fs -F $name/root_fs || f
+mkdir $name/install || f
+mount -o loop $name/root_fs $name/install || f
+
+echo
+echo ==============================
+echo Installing the base system
+echo ==============================
+echo 
+debootstrap  wheezy $name/install http://ftp.us.debian.org/debian || f
+
+echo
+echo ==============================
+echo Configuring the base system
+echo ==============================
+echo 
+
+echo '# /etc/fstab: static file system information.
+#
+# <file system> <mount point>   <type>  <options>       <dump>  <pass>
+/dev/ubd0        /             ext2    defaults                 0    0
+proc             /proc         proc    defaults                 0    0' \
+> $name/install/etc/fstab
+
+
+echo '# /etc/inittab: init(8) configuration.
+# $Id: inittab,v 1.91 2002/01/25 13:35:21 miquels Exp $
+
+# The default runlevel.
+id:2:initdefault:
+
+# Boot-time system configuration/initialization script.
+# This is run first except when booting in emergency (-b) mode.
+si::sysinit:/etc/init.d/rcS
+
+# What to do in single-user mode.
+~:S:wait:/sbin/sulogin
+
+# /etc/init.d executes the S and K scripts upon change
+# of runlevel.
+#
+# Runlevel 0 is halt.
+# Runlevel 1 is single-user.
+# Runlevels 2-5 are multi-user.
+# Runlevel 6 is reboot.
+
+l0:0:wait:/etc/init.d/rc 0
+l1:1:wait:/etc/init.d/rc 1
+l2:2:wait:/etc/init.d/rc 2
+l3:3:wait:/etc/init.d/rc 3
+l4:4:wait:/etc/init.d/rc 4
+l5:5:wait:/etc/init.d/rc 5
+l6:6:wait:/etc/init.d/rc 6
+# Normally not reached, but fallthrough in case of emergency.
+z6:6:respawn:/sbin/sulogin
+
+# What to do when CTRL-ALT-DEL is pressed.
+ca:12345:ctrlaltdel:/sbin/shutdown -t1 -a -r now
+
+# Action on special keypress (ALT-UpArrow).
+#kb::kbrequest:/bin/echo "Keyboard Request--edit /etc/inittab to let this work."
+
+# What to do when the power fails/returns.
+pf::powerwait:/etc/init.d/powerfail start
+pn::powerfailnow:/etc/init.d/powerfail now
+po::powerokwait:/etc/init.d/powerfail stop
+
+# /sbin/getty invocations for the runlevels.
+#
+# The "id" field MUST be the same as the last
+# characters of the device (after "tty").
+#
+# Format:
+#  <id>:<runlevels>:<action>:<process>
+#
+# Note that on most Debian systems tty7 is used by the X Window System,
+# so if you want to add more getty'\''s go ahead but skip tty7 if you run X.
+#
+0:1235:respawn:/sbin/getty 38400 console linux
+#1:2345:respawn:/sbin/getty 38400 tty1
+#2:23:respawn:/sbin/getty 38400 tty2
+#3:23:respawn:/sbin/getty 38400 tty3
+#4:23:respawn:/sbin/getty 38400 tty4
+#5:23:respawn:/sbin/getty 38400 tty5
+#6:23:respawn:/sbin/getty 38400 tty6
+
+# Example how to put a getty on a serial line (for a terminal)
+#
+#T0:23:respawn:/sbin/getty -L ttyS0 9600 vt100
+#T1:23:respawn:/sbin/getty -L ttyS1 9600 vt100
+
+# Example how to put a getty on a modem line.
+#
+#T3:23:respawn:/sbin/mgetty -x0 -s 57600 ttyS3' > $name/install/etc/inittab
+
+echo $name > $name/install/etc/hostname
+
+# set up apt
+cp /etc/apt/sources.list $name/install/etc/apt/sources.list || f
+
+
+# install SSH
+while :; do
+  echo -n "Do you want to install SSH? [y/n]: "
+  read nw_config
+
+  case "$nw_config" in
+    y | yes)
+      chroot $name/install apt-get -y update || f
+      chroot $name/install apt-get -y install ssh || f
+      break
+      ;;
+    n | no)
+      break
+      ;;
+    *)
+      echo "Please enter 'y' or 'n'"
+  esac
+done
+
+# network
+while :; do
+  echo -n "Do you want to configure the network? [y/n]: "
+  read nw_config
+
+  case "$nw_config" in
+    y | yes)
+      nw_config=1
+      break
+      ;;
+    n | no)
+      nw_config=0
+      break
+      ;;
+    *)
+      echo "Please enter 'y' or 'n'"
+  esac
+done
+  
+if [ "$nw_config" = "1" ]; then
+  setup_net
+  echo '# Used by ifup(8) and ifdown(8). See the interfaces(5) manpage or
+# /usr/share/doc/ifupdown/examples for more information.
+auto lo
+iface lo inet loopback
+
+# eth0
+auto eth0
+iface eth0 inet static
+   address '$nw_ip'
+   netmask '$nw_netmask'
+   network '$nw_network'
+   broadcast '$nw_bcast'
+   gateway '$nw_gw > $name/install/etc/network/interfaces
+fi
+
+echo
+echo ==============================
+echo Create root password
+echo ==============================
+echo
+
+chroot $name/install su - root -c "usermod -p `mkpasswd` root"
+
+
+# clean up
+umount $name/install
+rmdir $name/install
+
+echo
+echo ==============================
+echo Creating start script
+echo ==============================
+echo 
+
+while :; do
+  echo -n "Enter the amount of memory for the UML machine in MB: "
+  read mem
+  test $mem && break
+done
+
+if [ "$nw_config" = "1" ]; then
+echo '#!/bin/sh
+
+MEMORY="'$mem'M"
+HOST_IFACE="'$nw_if'"
+
+linux mem=$MEMORY eth0=daemon' > $name/run
+else
+echo '#!/bin/sh
+
+MEMORY="'$mem'M"
+
+linux mem=$MEMORY' > $name/run
+fi
+
+chmod +x $name/run
+
+echo
+echo ==============================
+echo Finished
+echo ==============================
+echo 
+echo To launch UML, type:
+echo   cd $name
+echo   ./run
+echo
+echo Have a lot of fun!
+echo
